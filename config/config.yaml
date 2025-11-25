@@ -1,0 +1,70 @@
+﻿# Lemiex Record App Configuration
+
+# Application Settings
+app:
+  name: "Lemiex Record App"
+  version: "1.0.0"
+  window_width: 1000
+  window_height: 950
+  github_repo: "Zitcraft/lemiex-record-app"  # Update with your GitHub repo
+  check_updates_on_startup: true
+
+# Camera Settings
+camera:
+  default_index: 0
+  preview_width: 1920
+  preview_height: 1080
+  recording_width: 1920
+  recording_height: 1080
+  fps: 24
+  codec: "mp4v"
+  output_format: "mp4"
+  timestamp_overlay: true
+  timestamp_format: "%Y-%m-%d %H:%M:%S"
+  flip_horizontal: true
+  brightness: 50
+
+# Scanner Settings
+scanner:
+  baud_rate: 9600
+  timeout: 1
+  default_port: "COM3"
+  qr_url_pattern: "https://lemiex.us/qr/(\\d+)"
+  auto_detect: true
+
+# API Settings
+api:
+  base_url: "https://lemiex.us"
+  timeout: 10
+  endpoints:
+    user_info: "/users/{user_id}"
+    order_validate: "/orders/{order_id}"
+    upload_metadata: "/recordings/metadata"
+    staff_list: "/api/staff"
+  staff_blacklist: [95, 99, 100]
+
+# Backblaze B2 Settings
+backblaze:
+  bucket_name: "LemiexEmbroidery"
+  upload_threads: 10
+  chunk_size: 52428800
+  max_retries: 3
+  video_folder: "video"
+  json_folder: "json"
+
+# Logging Settings
+logging:
+  level: "INFO"
+  file_path: "logs/app.log"
+  max_bytes: 10485760
+  backup_count: 5
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+
+# Video Storage
+storage:
+  local_temp_dir: "temp_videos"
+  auto_delete_after_upload: true
+  filename_format: "{order_id}_{timestamp}.mp4"
+  metadata_dir: "metadata"
+  save_metadata_json: true

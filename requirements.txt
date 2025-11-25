@@ -1,0 +1,26 @@
+# GUI Framework
+customtkinter==5.2.2
+Pillow>=10.4.0
+
+# Camera and Video Processing
+opencv-python>=4.9.0.80
+numpy>=1.26.4
+
+# Serial Port Communication (Scanner)
+pyserial==3.5
+
+# Backblaze B2 SDK
+b2sdk==2.2.0
+
+# HTTP Requests for API
+requests==2.31.0
+
+# Configuration Management
+PyYAML==6.0.1
+python-dotenv==1.0.1
+
+# Sound System
+pygame==2.5.2
+
+# Utilities
+pytz==2024.1
