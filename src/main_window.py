@@ -32,7 +32,8 @@ class MainWindow(ctk.CTk):
         super().__init__()
         
         # Load configuration
-        config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+        from .resource_path import get_resource_path
+        config_path = get_resource_path("config/config.yaml")
         with open(str(config_path), 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
         
@@ -49,7 +50,8 @@ class MainWindow(ctk.CTk):
         # Initialize sound system
         try:
             pygame.mixer.init()
-            self.voice_dir = Path(__file__).parent.parent / "voice"
+            from .resource_path import get_resource_path
+            self.voice_dir = get_resource_path("voice")
             logger.info(f"Sound system initialized: {self.voice_dir}")
         except Exception as e:
             logger.error(f"Failed to initialize sound system: {e}")
@@ -814,14 +816,10 @@ class MainWindow(ctk.CTk):
                                 if json_b2_url:
                                     logger.info(f"Metadata JSON uploaded to B2: {json_b2_url}")
                                     
-                                    # Update local JSON with B2 URL
-                                    self.metadata_manager.save_metadata(
+                                    # Update local JSON with B2 URL (same file)
+                                    self.metadata_manager.update_metadata(
                                         order_id=order_id,
-                                        username=username,
-                                        video_url=url,
-                                        json_b2_url=json_b2_url,
-                                        user_id=user_id,
-                                        duration=recording_duration
+                                        json_b2_url=json_b2_url
                                     )
                     
                     # Upload metadata to API (disabled - endpoint not available)

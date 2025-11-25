@@ -71,6 +71,7 @@ class Updater:
             }
         """
         try:
+            # Try /releases/latest first (excludes prerelease)
             logger.info(f"Checking for updates from: {self.github_api_url}")
             
             response = requests.get(
@@ -79,11 +80,32 @@ class Updater:
                 headers={'Accept': 'application/vnd.github.v3+json'}
             )
             
-            if response.status_code != 200:
+            # If 404 (no non-prerelease), try all releases
+            if response.status_code == 404:
+                logger.info("No stable release found, checking all releases...")
+                all_releases_url = f"https://api.github.com/repos/{self.github_repo}/releases"
+                response = requests.get(
+                    all_releases_url,
+                    timeout=10,
+                    headers={'Accept': 'application/vnd.github.v3+json'}
+                )
+                
+                if response.status_code != 200:
+                    logger.warning(f"GitHub API returned status {response.status_code}")
+                    return None
+                
+                releases = response.json()
+                if not releases or not isinstance(releases, list):
+                    logger.warning("No releases found")
+                    return None
+                
+                # Get the first release (most recent)
+                release_data = releases[0]
+            elif response.status_code != 200:
                 logger.warning(f"GitHub API returned status {response.status_code}")
                 return None
-            
-            release_data = response.json()
+            else:
+                release_data = response.json()
             
             # Get latest version
             latest_version = release_data.get('tag_name', '').lstrip('v')

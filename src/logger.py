@@ -12,7 +12,8 @@ import yaml
 
 def load_config():
     """Load configuration from config.yaml"""
-    config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+    from .resource_path import get_resource_path
+    config_path = get_resource_path("config/config.yaml")
     with open(config_path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
@@ -31,7 +32,8 @@ def setup_logger(name: str = "LemiexRecordApp") -> logging.Logger:
     log_config = config['logging']
     
     # Create logs directory if not exists
-    log_dir = Path(__file__).parent.parent / "logs"
+    from .resource_path import get_app_dir
+    log_dir = get_app_dir() / "logs"
     log_dir.mkdir(exist_ok=True)
     
     # Create logger

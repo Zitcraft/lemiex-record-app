@@ -27,7 +27,8 @@ class ScannerManager:
             config_path: Path to config.yaml file
         """
         if config_path is None:
-            config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+            from .resource_path import get_resource_path
+            config_path = get_resource_path("config/config.yaml")
         
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)

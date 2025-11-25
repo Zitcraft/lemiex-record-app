@@ -26,7 +26,8 @@ class MetadataManager:
         try:
             # Load configuration
             if config_path is None:
-                config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+                from .resource_path import get_resource_path
+                config_path = get_resource_path("config/config.yaml")
             else:
                 config_path = Path(config_path)
             
@@ -34,7 +35,8 @@ class MetadataManager:
                 self.config = yaml.safe_load(f)
             
             # Setup metadata directory
-            self.metadata_dir = Path(__file__).parent.parent / "metadata"
+            from .resource_path import get_app_dir
+            self.metadata_dir = get_app_dir() / "metadata"
             self.metadata_dir.mkdir(exist_ok=True)
             
             logger.info(f"MetadataManager initialized. Metadata directory: {self.metadata_dir}")
@@ -94,6 +96,50 @@ class MetadataManager:
             
         except Exception as e:
             logger.error(f"Failed to save metadata for order {order_id}: {e}")
+            return False
+    
+    def update_metadata(self, order_id: str, json_b2_url: str) -> bool:
+        """
+        Update existing metadata JSON with B2 JSON URL
+        
+        Args:
+            order_id: Order ID
+            json_b2_url: B2 JSON URL to add
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        try:
+            # Find the latest JSON file for this order_id
+            json_files = sorted(
+                self.metadata_dir.glob(f"{order_id}_*.json"),
+                key=lambda x: x.stat().st_mtime,
+                reverse=True
+            )
+            
+            if not json_files:
+                logger.warning(f"No metadata file found for order {order_id}")
+                return False
+            
+            # Update the latest file
+            latest_json = json_files[0]
+            
+            # Read existing metadata
+            with open(latest_json, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            
+            # Update with url_json
+            metadata["url_json"] = json_b2_url
+            
+            # Save back to same file
+            with open(latest_json, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"Metadata updated with JSON URL: {latest_json.name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update metadata for order {order_id}: {e}")
             return False
     
     def get_metadata(self, order_id: str) -> Optional[dict]:

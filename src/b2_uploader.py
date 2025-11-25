@@ -26,7 +26,8 @@ class B2Uploader:
             config_path: Path to config.yaml file
         """
         if config_path is None:
-            config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+            from .resource_path import get_resource_path
+            config_path = get_resource_path("config/config.yaml")
         
         # Load configuration
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -35,7 +36,8 @@ class B2Uploader:
         self.b2_config = self.config['backblaze']
         
         # Load environment variables
-        env_path = Path(__file__).parent.parent / ".env"
+        from .resource_path import get_app_dir
+        env_path = get_app_dir() / ".env"
         load_dotenv(env_path)
         
         self.key_id = os.getenv('B2_APPLICATION_KEY_ID')
