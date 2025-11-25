@@ -46,9 +46,9 @@ api:
 # Backblaze B2 Settings
 backblaze:
   bucket_name: "LemiexEmbroidery"
-  upload_threads: 10
-  chunk_size: 52428800
-  max_retries: 3
+  upload_threads: 15
+  chunk_size: 209715200
+  max_retries: 5
   video_folder: "video"
   json_folder: "json"
 
