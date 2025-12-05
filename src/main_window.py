@@ -20,6 +20,7 @@ from .b2_uploader import B2Uploader
 from .api_client import APIClient
 from .metadata_manager import MetadataManager
 from .updater import Updater
+from .dynamic_qr import DynamicQRGenerator
 from .logger import setup_logger
 
 logger = setup_logger("MainWindow")
@@ -38,6 +39,15 @@ class MainWindow(ctk.CTk):
             self.config = yaml.safe_load(f)
         
         app_config = self.config['app']
+        recording_config = self.config.get('recording', {})
+        limit_defaults = recording_config.get('limit_options', [3, 5, 10, 15, 30, 60])
+        self.limit_options = sorted({str(value) for value in limit_defaults}, key=lambda v: int(v))
+        default_limit = str(recording_config.get('default_limit_seconds', 30))
+        if default_limit not in self.limit_options:
+            self.limit_options.append(default_limit)
+            self.limit_options.sort(key=lambda v: int(v))
+        self.record_limit_var = ctk.StringVar(value=default_limit)
+        self.record_limit_seconds = int(default_limit) if default_limit.isdigit() else 0
         
         # Configure window
         self.title(app_config['name'])
@@ -72,6 +82,11 @@ class MainWindow(ctk.CTk):
         self.staff_data = {}  # Map display name to staff dict
         self.scanner_ports = {}  # Map scanner display name to port
         self.camera_indices = {}  # Map camera display name to index
+        self.last_scanner_port: Optional[str] = None
+        self.scanner_reconnect_in_progress = False
+        self.camera_reconnect_in_progress = False
+        self.active_uploads = {}
+        self.upload_counter = 0
         
         # Recording timer
         self.recording_start_time = None
@@ -80,6 +95,15 @@ class MainWindow(ctk.CTk):
         # Auto-delete setting
         storage_config = self.config.get('storage', {})
         self.auto_delete_var = ctk.BooleanVar(value=storage_config.get('auto_delete_after_upload', True))
+        
+        # QR flash effect state
+        self.qr_flash_active = False
+        self.app_qr_label = None  # Will be set when QR is loaded
+        
+        # Generate dynamic QR code for this app instance
+        from .resource_path import get_app_dir
+        self.qr_generator = DynamicQRGenerator(get_app_dir())
+        logger.info(f"Dynamic QR generated: {self.qr_generator.get_qr_code()}")
         
         # Setup UI first for fast startup
         self.setup_ui()
@@ -128,6 +152,7 @@ class MainWindow(ctk.CTk):
             self.after(1000, self._check_for_updates_background)
         
         logger.info("All components initialized")
+        self.after(1500, self.monitor_auto_refresh)
     
     def setup_ui(self):
         """Setup user interface"""
@@ -157,6 +182,52 @@ class MainWindow(ctk.CTk):
             height=360
         )
         self.preview_canvas.pack(pady=10, padx=0)
+        
+        # QR Codes Section (below camera preview)
+        self.qr_frame = ctk.CTkFrame(self.left_frame, corner_radius=10)
+        self.qr_frame.pack(pady=(0, 10), padx=10, fill="x")
+        
+        # QR title
+        qr_title = ctk.CTkLabel(
+            self.qr_frame,
+            text="Quick Access",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        qr_title.pack(pady=(10, 5))
+        
+        # Container for 3 QR codes
+        qr_container = ctk.CTkFrame(self.qr_frame, fg_color="transparent")
+        qr_container.pack(pady=(0, 10))
+        
+        # Load and display QR codes
+        self._load_qr_codes(qr_container)
+
+        # Status + progress area at bottom of left panel
+        self.status_container = ctk.CTkFrame(self.left_frame, fg_color="transparent")
+        self.status_container.pack(side="bottom", fill="x", padx=10, pady=(5, 10))
+        self.status_label = ctk.CTkLabel(
+            self.status_container,
+            text="Sẵn sàng",
+            font=ctk.CTkFont(size=12),
+            text_color="green",
+            anchor="w"
+        )
+        self.status_label.pack(anchor="w")
+
+        self.progress_bar = ctk.CTkProgressBar(self.status_container)
+        self.progress_bar.pack(pady=(6, 0), fill="x")
+        self.progress_bar.set(0)
+        self.progress_bar.pack_forget()
+
+        self.progress_info_label = ctk.CTkLabel(
+            self.status_container,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#CCCCCC",
+            anchor="w"
+        )
+        self.progress_info_label.pack(anchor="w")
+        self.progress_info_label.pack_forget()
         
         # Right panel - Controls
         self.right_frame = ctk.CTkFrame(self, corner_radius=10)
@@ -266,6 +337,11 @@ class MainWindow(ctk.CTk):
             placeholder_text="Nhập hoặc scan mã đơn"
         )
         self.order_entry.pack(pady=5, padx=20, fill="x")
+        order_validate_cmd = self.register(self.validate_order_input)
+        self.order_entry.configure(
+            validate="key",
+            validatecommand=(order_validate_cmd, "%P")
+        )
         
         # User selection
         user_label = ctk.CTkLabel(self.scrollable_frame, text="Người sử dụng:", anchor="w")
@@ -286,6 +362,22 @@ class MainWindow(ctk.CTk):
             width=100
         )
         refresh_staff_btn.pack(pady=5)
+
+        # Recording limit selection
+        limit_label = ctk.CTkLabel(
+            self.scrollable_frame,
+            text="Giới hạn thời gian (giây):",
+            anchor="w"
+        )
+        limit_label.pack(pady=(20, 5), padx=20, fill="x")
+
+        self.limit_combobox = ctk.CTkComboBox(
+            self.scrollable_frame,
+            values=self.limit_options,
+            command=self.on_limit_changed
+        )
+        self.limit_combobox.pack(pady=5, padx=20, fill="x")
+        self.limit_combobox.set(self.record_limit_var.get())
         
         # Recording timer label
         self.timer_label = ctk.CTkLabel(
@@ -308,22 +400,6 @@ class MainWindow(ctk.CTk):
         )
         self.record_button.pack(pady=(5, 10), padx=20, fill="x")
         
-        # Status label
-        self.status_label = ctk.CTkLabel(
-            self.scrollable_frame,
-            text="Sẵn sàng",
-            font=ctk.CTkFont(size=12),
-            text_color="green"
-        )
-        self.status_label.pack(pady=10)
-        
-        # Progress bar
-        self.progress_bar = ctk.CTkProgressBar(self.scrollable_frame)
-        self.progress_bar.pack(pady=10, padx=20, fill="x")
-        self.progress_bar.set(0)
-        self.progress_bar.pack_forget()  # Hidden by default
-        
-        
     
     def refresh_camera_list(self):
         """Refresh list of available cameras"""
@@ -331,6 +407,9 @@ class MainWindow(ctk.CTk):
             return
             
         logger.info("Refreshing camera list")
+        self.camera_combobox.configure(values=["Đang tải..."])
+        self.camera_combobox.set("Đang tải...")
+        self.status_label.configure(text="Đang tải danh sách camera...", text_color="orange")
         
         # Remember current camera if any
         current_camera_idx = self.camera_manager.current_camera_index if self.camera_manager.cap is not None else None
@@ -342,6 +421,10 @@ class MainWindow(ctk.CTk):
             self.camera_combobox.configure(values=camera_names)
             self.camera_combobox.set(camera_names[0])
             self.camera_indices = {name: idx for idx, name in cameras}
+            self.status_label.configure(
+                text=f"Đã tải {len(cameras)} camera",
+                text_color="green"
+            )
             
             # Restart camera if it was running
             if current_camera_idx is not None:
@@ -355,6 +438,10 @@ class MainWindow(ctk.CTk):
             self.camera_combobox.configure(values=["Không tìm thấy camera"])
             self.camera_combobox.set("Không tìm thấy camera")
             self.camera_indices = {}
+            self.status_label.configure(
+                text="Không tìm thấy camera",
+                text_color="red"
+            )
     
     def refresh_scanner_list(self):
         """Refresh list of available scanners"""
@@ -362,6 +449,9 @@ class MainWindow(ctk.CTk):
             return
             
         logger.info("Refreshing scanner list")
+        self.scanner_combobox.configure(values=["Đang tải..."])
+        self.scanner_combobox.set("Đang tải...")
+        self.status_label.configure(text="Đang tải danh sách scanner...", text_color="orange")
         ports = self.scanner_manager.list_available_ports()
         
         if ports:
@@ -382,10 +472,19 @@ class MainWindow(ctk.CTk):
                         break
             else:
                 self.scanner_combobox.set(port_names[0])
+            self.status_label.configure(
+                text=f"Đã tải {len(ports)} scanner",
+                text_color="green"
+            )
         else:
             self.scanner_combobox.configure(values=["Không tìm thấy cổng COM"])
             self.scanner_combobox.set("Không tìm thấy cổng COM")
             self.scanner_ports = {}
+            self.last_scanner_port = None
+            self.status_label.configure(
+                text="Không tìm thấy scanner",
+                text_color="red"
+            )
     
     def on_camera_changed(self, choice: str):
         """Handle camera selection change"""
@@ -434,17 +533,46 @@ class MainWindow(ctk.CTk):
         if choice in self.scanner_ports:
             port = self.scanner_ports[choice]
             logger.info(f"Connecting to scanner: {port}")
+            self.status_label.configure(text="Đang kết nối scanner...", text_color="orange")
             
             if self.scanner_manager.connect(port):
+                self.last_scanner_port = port
                 self.status_label.configure(text=f"Scanner kết nối: {port}", text_color="green")
                 # Start listening for scans
                 self.scanner_manager.start_listening(self.on_barcode_scanned)
             else:
                 self.status_label.configure(text="Lỗi kết nối scanner", text_color="red")
+                self.last_scanner_port = None
     
     def on_barcode_scanned(self, order_id: str):
         """Handle barcode scan event"""
         logger.info(f"Barcode scanned: {order_id}")
+        
+        # Check if it's THIS app's unique identifier QR code
+        if self.qr_generator.is_my_qr(order_id):
+            session_info = self.qr_generator.get_session_info()
+            com_port = session_info.get('com_port', 'Unknown')
+            session_id = session_info.get('session_id', 'Unknown')
+            
+            logger.info(f"This app's QR scanned - Session: {session_id}, COM: {com_port}")
+            self.flash_app_qr()
+            self.play_sound("3_dupcode_continue.mp3")  # Play notification sound
+            self.status_label.configure(
+                text=f"✓ App nhận dạng - {com_port} - ID: {session_id[:8]}",
+                text_color="#FFD700"  # Gold color
+            )
+            return  # Don't process as order ID
+        
+        # Check for USB-COM or Factory-Default commands
+        if order_id.upper() == "USB-COM-SETUP":
+            logger.info("USB-COM setup QR scanned")
+            self.status_label.configure(text="USB-COM Setup", text_color="cyan")
+            return
+        
+        if order_id.upper() == "FACTORY-DEFAULT":
+            logger.info("Factory-Default QR scanned")
+            self.status_label.configure(text="Factory Default", text_color="cyan")
+            return
         
         current_order = self.order_entry.get().strip()
         
@@ -480,6 +608,9 @@ class MainWindow(ctk.CTk):
             return
             
         logger.info("Refreshing staff list")
+        self.user_combobox.configure(values=["Đang tải..."])
+        self.user_combobox.set("Đang tải...")
+        self.status_label.configure(text="Đang tải danh sách nhân viên...", text_color="orange")
         
         def fetch():
             if self.api_client is None:
@@ -516,6 +647,246 @@ class MainWindow(ctk.CTk):
                 self.after(0, update_ui_error)
         
         threading.Thread(target=fetch, daemon=True).start()
+
+    def monitor_auto_refresh(self):
+        """Auto refresh data and reconnect scanner when warnings appear."""
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
+        manager = self.scanner_manager
+        if manager is not None:
+            scanner_ready = manager.is_connected and manager.serial_port is not None and manager.serial_port.is_open
+            if (not scanner_ready) and (not self.scanner_reconnect_in_progress):
+                self.scanner_reconnect_in_progress = True
+                self.status_label.configure(
+                    text="Mất kết nối scanner - đang thử lại...",
+                    text_color="orange"
+                )
+                
+                def reconnect():
+                    local_manager = self.scanner_manager
+                    if local_manager is None:
+                        self.scanner_reconnect_in_progress = False
+                        return
+                    success = False
+                    preferred_ports = []
+                    default_port = local_manager.scanner_config.get('default_port')
+                    if default_port:
+                        preferred_ports.append(default_port)
+                    if self.last_scanner_port and self.last_scanner_port not in preferred_ports:
+                        preferred_ports.append(self.last_scanner_port)
+
+                    available_port_names = []
+                    try:
+                        available_port_names = [port for port, _desc, _hwid in local_manager.list_available_ports()]
+                    except Exception as err:
+                        logger.error(f"Không thể quét cổng COM: {err}")
+                    
+                    for target_port in preferred_ports:
+                        if target_port is None:
+                            continue
+                        if available_port_names and target_port not in available_port_names:
+                            continue
+                        if local_manager.connect(target_port):
+                            success = True
+                            self.last_scanner_port = target_port
+                            break
+                    
+                    if not success and local_manager.scanner_config.get('auto_detect', True):
+                        auto_port = local_manager.auto_detect_scanner()
+                        if auto_port:
+                            success = local_manager.connect(auto_port)
+                            if success:
+                                self.last_scanner_port = auto_port
+                    
+                    if success:
+                        local_manager.start_listening(self.on_barcode_scanned)
+                        display_name = next(
+                            (name for name, port in self.scanner_ports.items() if port == self.last_scanner_port),
+                            self.last_scanner_port
+                        )
+                        if display_name:
+                            self.after(0, lambda n=display_name: self.scanner_combobox.set(n))
+                        self.after(0, lambda: self.status_label.configure(
+                            text=f"Scanner kết nối: {self.last_scanner_port}",
+                            text_color="green"
+                        ))
+                    else:
+                        self.after(0, lambda: self.status_label.configure(
+                            text="Không thể kết nối scanner",
+                            text_color="red"
+                        ))
+                    self.scanner_reconnect_in_progress = False
+                
+                threading.Thread(target=reconnect, daemon=True).start()
+        
+        camera_manager = self.camera_manager
+        if camera_manager is not None:
+            cap_ready = (
+                camera_manager.cap is not None and
+                camera_manager.cap.isOpened()
+            )
+            if (not cap_ready) and (not self.camera_reconnect_in_progress):
+                self.camera_reconnect_in_progress = True
+                self.status_label.configure(
+                    text="Mất kết nối camera - đang thử lại...",
+                    text_color="orange"
+                )
+
+                def reconnect_camera():
+                    local_camera = self.camera_manager
+                    if local_camera is None:
+                        self.camera_reconnect_in_progress = False
+                        return
+                    preferred_indices = []
+                    if local_camera.current_camera_index is not None:
+                        preferred_indices.append(local_camera.current_camera_index)
+                    default_index = local_camera.camera_config.get('default_index', 0)
+                    if default_index not in preferred_indices:
+                        preferred_indices.append(default_index)
+                    success = False
+                    for idx in preferred_indices:
+                        if idx is None:
+                            continue
+                        success = local_camera.start_camera(idx)
+                        if success:
+                            break
+                    if success:
+                        camera_name = next(
+                            (name for name, index in self.camera_indices.items() if index == local_camera.current_camera_index),
+                            f"Camera {local_camera.current_camera_index}"
+                        )
+                        self.after(0, lambda: self.status_label.configure(
+                            text=f"Camera hoạt động: {camera_name}",
+                            text_color="green"
+                        ))
+                        self.after(0, lambda n=camera_name: self.camera_combobox.set(n))
+                    else:
+                        self.after(0, lambda: self.status_label.configure(
+                            text="Không thể kết nối camera",
+                            text_color="red"
+                        ))
+                    self.camera_reconnect_in_progress = False
+
+                threading.Thread(target=reconnect_camera, daemon=True).start()
+        
+        if not self.staff_data:
+            self.refresh_staff_list()
+        if not self.camera_indices:
+            self.refresh_camera_list()
+        if not self.scanner_ports:
+            self.refresh_scanner_list()
+        
+        self.after(8000, self.monitor_auto_refresh)
+    
+    def _load_qr_codes(self, container):
+        """Load and display 3 QR codes with labels"""
+        from .resource_path import get_resource_path
+        
+        # Get session info for display
+        session_info = self.qr_generator.get_session_info()
+        session_id = session_info.get('session_id', 'Unknown')
+        com_port = session_info.get('com_port', 'Unknown')
+        
+        qr_configs = [
+            {"file": "USB-COM.png", "label": "USB-COM", "var_name": None},
+            {"file": "Factory-Default.png", "label": "Factory Default", "var_name": None},
+            {"file": "app-identifier.png", "label": f"This App\n{com_port}\nID: {session_id[:4]}", "var_name": "app_qr_label"}
+        ]
+        
+        for i, qr_config in enumerate(qr_configs):
+            # Create frame for each QR
+            qr_item = ctk.CTkFrame(container, fg_color="transparent")
+            qr_item.grid(row=0, column=i, padx=35, pady=5)
+            
+            try:
+                # Use dynamic QR for app identifier
+                if qr_config['var_name'] == "app_qr_label":
+                    qr_path = self.qr_generator.get_qr_path()
+                else:
+                    qr_path = get_resource_path(f"qr_codes/{qr_config['file']}")
+                
+                # Load image with PIL
+                pil_image = Image.open(str(qr_path))
+                # Resize to fit UI (100x100)
+                # pil_image = pil_image.resize((200, 200), Image.Resampling.LANCZOS)
+                
+                # Convert to CTkImage
+                ctk_image = ctk.CTkImage(
+                    light_image=pil_image,
+                    dark_image=pil_image,
+                    size=(130, 130)
+                )
+                
+                # Create label with image
+                qr_label = ctk.CTkLabel(
+                    qr_item,
+                    image=ctk_image,
+                    text="",
+                    width=140,
+                    height=140,
+                    fg_color="#FFFFFF",
+                    corner_radius=6
+                )
+                qr_label.pack(pady=(0, 5))
+                
+                # Store reference to app QR for flash effect
+                if qr_config['var_name'] == "app_qr_label":
+                    self.app_qr_label = qr_label
+                    self.app_qr_original_color = "#FFFFFF"
+                
+                logger.info(f"Loaded QR code: {qr_config['file']}")
+                
+            except Exception as e:
+                logger.error(f"Failed to load QR {qr_config['file']}: {e}")
+                # Fallback to text label
+                qr_label = ctk.CTkLabel(
+                    qr_item,
+                    text=f"[QR]\n{qr_config['label'][:8]}",
+                    width=100,
+                    height=100,
+                    fg_color="#2B2B2B",
+                    corner_radius=5
+                )
+                qr_label.pack(pady=(0, 5))
+            
+            # Label below QR
+            text_label = ctk.CTkLabel(
+                qr_item,
+                text=qr_config['label'],
+                font=ctk.CTkFont(size=10)
+            )
+            text_label.pack()
+    
+    def flash_app_qr(self):
+        """Flash the app identifier QR code when scanned"""
+        if self.app_qr_label is None or self.qr_flash_active:
+            return
+        
+        self.qr_flash_active = True
+        original_color = self.app_qr_original_color if hasattr(self, 'app_qr_original_color') else "#FFFFFF"
+        
+        # Flash sequence: bright gold -> original -> repeat 3 times
+        flash_colors = ["#FFD700", original_color, "#FFD700", original_color, "#FFD700", original_color]
+        flash_delays = [100, 200, 300, 400, 500, 600]  # milliseconds
+        
+        def flash_step(index):
+            if index < len(flash_colors):
+                try:
+                    if self.app_qr_label is not None:
+                        self.app_qr_label.configure(fg_color=flash_colors[index])
+                except Exception as e:
+                    logger.error(f"Flash error: {e}")
+                self.after(flash_delays[index] - (flash_delays[index-1] if index > 0 else 0), 
+                          lambda: flash_step(index + 1))
+            else:
+                self.qr_flash_active = False
+        
+        flash_step(0)
+        logger.info("App QR flash triggered")
     
     def on_user_changed(self, choice: str):
         """Handle user selection change"""
@@ -524,6 +895,86 @@ class MainWindow(ctk.CTk):
             logger.info(f"Selected user: {staff['username']} (ID: {staff['id']})")
             self.status_label.configure(
                 text=f"Đã chọn: {staff['full_name']}",
+                text_color="blue"
+            )
+
+    def validate_order_input(self, proposed_value: str) -> bool:
+        """Allow only digits (or empty) in order entry."""
+        if proposed_value == "":
+            return True
+        if proposed_value.isdigit():
+            return True
+        try:
+            self.bell()
+        except Exception:
+            pass
+        return False
+
+    def _register_upload_task(self, order_id: str) -> str:
+        """Track a new upload and ensure progress UI is visible."""
+        self.upload_counter += 1
+        task_id = f"upload_{self.upload_counter}"
+        self.active_uploads[task_id] = {"order": order_id, "progress": 0.0}
+        self._refresh_progress_widgets()
+        return task_id
+
+    def _update_upload_progress(self, task_id: str, progress: float):
+        """Update progress (0-1) for a tracked upload."""
+        if task_id not in self.active_uploads:
+            return
+        clamped = max(0.0, min(1.0, progress))
+        self.active_uploads[task_id]["progress"] = clamped
+        self._refresh_progress_widgets()
+
+    def _complete_upload_task(self, task_id: str):
+        """Remove upload from tracker and hide UI if none remain."""
+        if task_id in self.active_uploads:
+            del self.active_uploads[task_id]
+        self._refresh_progress_widgets()
+
+    def _refresh_progress_widgets(self):
+        """Show/hide progress widgets based on active uploads."""
+        if not hasattr(self, "progress_bar"):
+            return
+        if not self.active_uploads:
+            if self.progress_bar.winfo_manager():
+                self.progress_bar.pack_forget()
+            if self.progress_info_label.winfo_manager():
+                self.progress_info_label.pack_forget()
+            self.progress_bar.set(0)
+            self.progress_info_label.configure(text="")
+            return
+        # Ensure widgets are visible
+        if not self.progress_bar.winfo_ismapped():
+            self.progress_bar.pack(pady=(6, 0), fill="x")
+        if not self.progress_info_label.winfo_ismapped():
+            self.progress_info_label.pack(anchor="w", pady=(4, 0))
+        # Update progress + text
+        avg_progress = sum(task["progress"] for task in self.active_uploads.values()) / len(self.active_uploads)
+        self.progress_bar.set(avg_progress)
+        self.progress_info_label.configure(text=self._build_progress_summary())
+
+    def _build_progress_summary(self) -> str:
+        """Human readable summary for progress label."""
+        count = len(self.active_uploads)
+        if count == 0:
+            return ""
+        if count == 1:
+            task = next(iter(self.active_uploads.values()))
+            return f"Đang upload: {task['order']}"
+        return f"Đang upload {count} video"
+
+    def on_limit_changed(self, choice: str):
+        """Update recording time limit from dropdown selection."""
+        try:
+            seconds = int(choice)
+        except ValueError:
+            seconds = 0
+        self.record_limit_seconds = seconds
+        self.record_limit_var.set(choice)
+        if not self.is_recording:
+            self.status_label.configure(
+                text=f"Giới hạn ghi: {seconds}s",
                 text_color="blue"
             )
     
@@ -715,6 +1166,20 @@ class MainWindow(ctk.CTk):
                 text=f"{minutes:02d}:{seconds:02d}",
                 text_color="#DC2626"
             )
+
+            if self.record_limit_seconds > 0 and elapsed >= self.record_limit_seconds:
+                if self.is_recording:
+                    logger.info(
+                        "Recording limit reached (%ss) – stopping automatically",
+                        self.record_limit_seconds
+                    )
+                    self.timer_running = False
+                    self.status_label.configure(
+                        text="Đạt giới hạn thời gian, đang dừng...",
+                        text_color="orange"
+                    )
+                    self.after(0, lambda: self.stop_recording(auto_mode=True))
+                    return
             # Schedule next update
             self.after(1000, self.update_recording_timer)
     
@@ -756,107 +1221,111 @@ class MainWindow(ctk.CTk):
             else:
                 self.status_label.configure(text="Đang upload...", text_color="orange")
             
-            self.progress_bar.pack(pady=10, padx=20, fill="x")
-            self.progress_bar.set(0)
-            
             # Upload in background
             order_id = recording_order if recording_order else self.order_entry.get().strip()
             user_id = self.get_current_user_id()
             username = self.get_current_username()
+            task_id = self._register_upload_task(order_id)
             
             def upload():
-                if self.b2_uploader is None or self.api_client is None:
-                    return
-                
-                # Play end sound before upload
-                self.play_sound("2_end_record.mp3")
-                    
-                def progress_callback(bytes_sent, total_bytes):
-                    progress = bytes_sent / total_bytes
-                    self.after(0, lambda: self.progress_bar.set(progress))
-                
-                url = self.b2_uploader.upload_with_cleanup(
-                    video_path,
-                    order_id,
-                    progress_callback
-                )
-                
-                if url:
-                    # Save metadata JSON locally first
-                    json_b2_url = None
-                    if username and self.metadata_manager is not None:
-                        # Save JSON locally
-                        json_saved = self.metadata_manager.save_metadata(
-                            order_id=order_id,
-                            username=username,
-                            video_url=url,
-                            user_id=user_id,
-                            duration=recording_duration
-                        )
+                try:
+                    if self.b2_uploader is None or self.api_client is None:
+                        self.after(0, lambda: self.status_label.configure(
+                            text="Thiếu cấu hình upload",
+                            text_color="red"
+                        ))
+                        return
+
+                    # Play end sound before upload
+                    self.play_sound("2_end_record.mp3")
                         
-                        if json_saved:
-                            logger.info(f"Metadata JSON saved locally for order {order_id}")
-                            
-                            # Find the JSON file that was just created
-                            metadata_dir = Path(self.metadata_manager.metadata_dir)
-                            json_files = sorted(
-                                metadata_dir.glob(f"{order_id}_*.json"),
-                                key=lambda x: x.stat().st_mtime,
-                                reverse=True
+                    def progress_callback(bytes_sent, total_bytes):
+                        progress = (bytes_sent / total_bytes) if total_bytes else 0
+                        self.after(0, lambda p=progress: self._update_upload_progress(task_id, p))
+                    
+                    url = self.b2_uploader.upload_with_cleanup(
+                        video_path,
+                        order_id,
+                        progress_callback,
+                        cleanup_override=bool(self.auto_delete_var.get())
+                    )
+                    
+                    if url:
+                        # Save metadata JSON locally first
+                        json_b2_url = None
+                        if username and self.metadata_manager is not None:
+                            # Save JSON locally
+                            json_saved = self.metadata_manager.save_metadata(
+                                order_id=order_id,
+                                username=username,
+                                video_url=url,
+                                user_id=user_id,
+                                duration=recording_duration
                             )
                             
-                            if json_files:
-                                latest_json = json_files[0]
-                                # Upload JSON to B2
-                                json_b2_url = self.b2_uploader.upload_json_metadata(
-                                    str(latest_json),
-                                    order_id
+                            if json_saved:
+                                logger.info(f"Metadata JSON saved locally for order {order_id}")
+                                
+                                # Find the JSON file that was just created
+                                metadata_dir = Path(self.metadata_manager.metadata_dir)
+                                json_files = sorted(
+                                    metadata_dir.glob(f"{order_id}_*.json"),
+                                    key=lambda x: x.stat().st_mtime,
+                                    reverse=True
                                 )
                                 
-                                if json_b2_url:
-                                    logger.info(f"Metadata JSON uploaded to B2: {json_b2_url}")
-                                    
-                                    # Update local JSON with B2 URL (same file)
-                                    self.metadata_manager.update_metadata(
-                                        order_id=order_id,
-                                        json_b2_url=json_b2_url
+                                if json_files:
+                                    latest_json = json_files[0]
+                                    # Upload JSON to B2
+                                    json_b2_url = self.b2_uploader.upload_json_metadata(
+                                        str(latest_json),
+                                        order_id
                                     )
-                    
-                    # Upload metadata to API (disabled - endpoint not available)
-                    # if user_id:
-                    #     self.api_client.upload_recording_metadata(
-                    #         order_id=order_id,
-                    #         user_id=user_id,
-                    #         video_url=url
-                    #     )
-                    
-                    self.after(0, lambda: self.status_label.configure(
-                        text=f"✓ Hoàn tất: {order_id}",
-                        text_color="green"
-                    ))
-                    
-                    # Auto-delete local video if enabled
-                    if self.auto_delete_var.get():
-                        try:
-                            if os.path.exists(video_path):
-                                os.remove(video_path)
-                                logger.info(f"Deleted local video: {video_path}")
-                        except Exception as e:
-                            logger.error(f"Failed to delete local video: {e}")
-                else:
-                    self.after(0, lambda: self.status_label.configure(
-                        text=f"✗ Lỗi upload: {order_id}",
-                        text_color="red"
-                    ))
-                    
-                    # Only show error popup if not auto mode
-                    if not auto_mode:
-                        self.after(0, lambda: messagebox.showerror(
-                            "Lỗi",
-                            "Không thể upload video"
+                                    
+                                    if json_b2_url:
+                                        logger.info(f"Metadata JSON uploaded to B2: {json_b2_url}")
+                                        
+                                        # Update local JSON with B2 URL (same file)
+                                        self.metadata_manager.update_metadata(
+                                            order_id=order_id,
+                                            json_b2_url=json_b2_url
+                                        )
+                        
+                        # Upload metadata to API (disabled - endpoint not available)
+                        # if user_id:
+                        #     self.api_client.upload_recording_metadata(
+                        #         order_id=order_id,
+                        #         user_id=user_id,
+                        #         video_url=url
+                        #     )
+                        
+                        self.after(0, lambda: self.status_label.configure(
+                            text=f"✓ Hoàn tất: {order_id}",
+                            text_color="green"
                         ))
-                
-                self.after(0, lambda: self.progress_bar.pack_forget())
+                        
+                        # Auto-delete local video if enabled
+                        if self.auto_delete_var.get():
+                            try:
+                                if os.path.exists(video_path):
+                                    os.remove(video_path)
+                                    logger.info(f"Deleted local video: {video_path}")
+                            except Exception as e:
+                                logger.error(f"Failed to delete local video: {e}")
+                    else:
+                        self.after(0, lambda: self.status_label.configure(
+                            text=f"✗ Lỗi upload: {order_id}",
+                            text_color="red"
+                        ))
+                        
+                        # Only show error popup if not auto mode
+                        if not auto_mode:
+                            self.after(0, lambda: messagebox.showerror(
+                                "Lỗi",
+                                "Không thể upload video"
+                            ))
+                finally:
+                    self.after(0, lambda: self._complete_upload_task(task_id))
             
             threading.Thread(target=upload, daemon=True).start()
     

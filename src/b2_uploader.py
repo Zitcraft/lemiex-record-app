@@ -244,7 +244,8 @@ class B2Uploader:
         self,
         file_path: str,
         order_id: str,
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        cleanup_override: Optional[bool] = None
     ) -> Optional[str]:
         """
         Upload video and optionally delete local file
@@ -253,13 +254,18 @@ class B2Uploader:
             file_path: Path to video file
             order_id: Order ID
             progress_callback: Progress callback function
+            cleanup_override: Optional flag to force cleanup behavior regardless of config
             
         Returns:
             Public URL or None if failed
         """
         url = self.upload_video(file_path, order_id, progress_callback)
         
-        if url and self.config['storage']['auto_delete_after_upload']:
+        should_cleanup = self.config['storage']['auto_delete_after_upload']
+        if cleanup_override is not None:
+            should_cleanup = bool(cleanup_override)
+        
+        if url and should_cleanup:
             self.delete_local_file(file_path)
         
         return url

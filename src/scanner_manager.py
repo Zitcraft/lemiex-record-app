@@ -40,6 +40,7 @@ class ScannerManager:
         self.is_listening = False
         self.listen_thread: Optional[threading.Thread] = None
         self.callback: Optional[Callable] = None
+        self.last_port: Optional[str] = None
         
         # Compile regex pattern for QR code parsing
         self.qr_pattern = re.compile(self.scanner_config['qr_url_pattern'])
@@ -94,6 +95,7 @@ class ScannerManager:
             
             if self.serial_port.is_open:
                 self.is_connected = True
+                self.last_port = port
                 logger.info(f"Connected to scanner on {port}")
                 return True
             else:
@@ -149,10 +151,18 @@ class ScannerManager:
             scanned_data: Raw scanned data
             
         Returns:
-            Extracted order ID or None
+            Extracted order ID, raw data for special QRs, or None
         """
         if not scanned_data:
             return None
+        
+        # Check if it's a special command QR (pass through as-is)
+        upper_data = scanned_data.upper()
+        if (upper_data.startswith('LEMIEX-APP-') or 
+            upper_data == 'USB-COM-SETUP' or 
+            upper_data == 'FACTORY-DEFAULT'):
+            logger.info(f"Special QR detected: {scanned_data}")
+            return scanned_data
         
         # Try to match URL pattern
         match = self.qr_pattern.search(scanned_data)
@@ -209,6 +219,11 @@ class ScannerManager:
         
         while self.is_listening:
             try:
+                if self.serial_port is None or not self.serial_port.is_open:
+                    logger.warning("Scanner serial port unavailable during listen loop")
+                    self.is_connected = False
+                    break
+                
                 if self.serial_port and self.serial_port.in_waiting > 0:
                     data = self.serial_port.readline()
                     decoded = data.decode('utf-8', errors='ignore').strip()
@@ -222,9 +237,24 @@ class ScannerManager:
                 
                 time.sleep(0.1)  # Small delay to prevent CPU spinning
                 
+            except serial.SerialException as e:
+                logger.error(f"Serial error in listen loop: {str(e)}")
+                self.is_connected = False
+                break
             except Exception as e:
                 logger.error(f"Error in listen loop: {str(e)}")
-                time.sleep(1)  # Longer delay on error
+                self.is_connected = False
+                break
+        
+        # Ensure port is closed when loop exits unexpectedly
+        if not self.is_connected and self.serial_port is not None:
+            try:
+                self.serial_port.close()
+            except Exception:
+                pass
+            self.serial_port = None
+        
+        self.is_listening = False
         
         logger.debug("Listen loop ended")
     

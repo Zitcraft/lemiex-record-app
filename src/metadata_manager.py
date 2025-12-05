@@ -53,7 +53,7 @@ class MetadataManager:
             order_id: Order ID
             username: Username who made the recording
             video_url: B2 upload URL
-            json_b2_url: B2 JSON URL (optional)
+            json_b2_url: Deprecated, kept for backwards compatibility
             user_id: User ID (optional)
             duration: Recording duration in seconds (optional)
             
@@ -78,8 +78,6 @@ class MetadataManager:
             # Add optional fields
             if user_id:
                 metadata["id_user"] = user_id
-            if json_b2_url:
-                metadata["url_json"] = json_b2_url
             
             # Create filename
             filename = f"{order_id}_{timestamp}.json"
@@ -99,48 +97,13 @@ class MetadataManager:
             return False
     
     def update_metadata(self, order_id: str, json_b2_url: str) -> bool:
-        """
-        Update existing metadata JSON with B2 JSON URL
-        
-        Args:
-            order_id: Order ID
-            json_b2_url: B2 JSON URL to add
-            
-        Returns:
-            True if updated successfully, False otherwise
-        """
-        try:
-            # Find the latest JSON file for this order_id
-            json_files = sorted(
-                self.metadata_dir.glob(f"{order_id}_*.json"),
-                key=lambda x: x.stat().st_mtime,
-                reverse=True
-            )
-            
-            if not json_files:
-                logger.warning(f"No metadata file found for order {order_id}")
-                return False
-            
-            # Update the latest file
-            latest_json = json_files[0]
-            
-            # Read existing metadata
-            with open(latest_json, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
-            
-            # Update with url_json
-            metadata["url_json"] = json_b2_url
-            
-            # Save back to same file
-            with open(latest_json, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
-            
-            logger.info(f"Metadata updated with JSON URL: {latest_json.name}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to update metadata for order {order_id}: {e}")
-            return False
+        """Legacy helper retained for compatibility (no longer writes url_json)."""
+
+        logger.info(
+            "Skipping local url_json write for order %s (still uploaded to B2)",
+            order_id
+        )
+        return True
     
     def get_metadata(self, order_id: str) -> Optional[dict]:
         """

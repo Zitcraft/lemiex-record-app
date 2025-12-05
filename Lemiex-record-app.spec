@@ -12,6 +12,9 @@ a = Analysis(
         ('voice/2_end_record.mp3', 'voice'),
         ('voice/3_dupcode_continue.mp3', 'voice'),
         ('logo/logo.ico', 'logo'),
+        ('qr_codes/USB-COM.png', 'qr_codes'),
+        ('qr_codes/Factory-Default.png', 'qr_codes'),
+        ('qr_codes/app-identifier.png', 'qr_codes'),
         ('.env.example', '.'),
     ],
     hiddenimports=[
@@ -25,6 +28,7 @@ a = Analysis(
         # Logging handlers
         'logging.handlers',
         # Pygame mixer for audio
+        'pygame',
         'pygame.mixer',
         'pygame._sdl2',
         'pygame._sdl2.audio',
@@ -39,6 +43,11 @@ a = Analysis(
         # Updater dependencies
         'tempfile',
         'subprocess',
+        # Dynamic QR generator
+        'uuid',
+        'qrcode',
+        'qrcode.image.pil',
+        'json',
     ],
     hookspath=[],
     hooksconfig={},

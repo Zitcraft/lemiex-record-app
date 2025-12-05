@@ -3,9 +3,9 @@
 # Application Settings
 app:
   name: "Lemiex Record App"
-  version: "1.0.0"
+  version: "1.0.1"
   window_width: 1000
-  window_height: 950
+  window_height: 1000
   github_repo: "Zitcraft/lemiex-record-app"  # Update with your GitHub repo
   check_updates_on_startup: true
 
@@ -16,13 +16,18 @@ camera:
   preview_height: 1080
   recording_width: 1920
   recording_height: 1080
-  fps: 24
+  fps: 14
   codec: "mp4v"
   output_format: "mp4"
   timestamp_overlay: true
   timestamp_format: "%Y-%m-%d %H:%M:%S"
   flip_horizontal: true
   brightness: 50
+
+# Recording Settings
+recording:
+  default_limit_seconds: 30
+  limit_options: [3, 5, 10, 15, 30, 60]
 
 # Scanner Settings
 scanner:

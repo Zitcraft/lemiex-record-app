@@ -20,7 +20,8 @@ PyYAML==6.0.1
 python-dotenv==1.0.1
 
 # Sound System
-pygame==2.5.2
+pygame==2.6.1
 
 # Utilities
 pytz==2024.1
+qrcode[pil]==7.4.2
